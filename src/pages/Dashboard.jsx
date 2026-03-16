@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { User, Calendar, Clock, Star, MessageSquare, Settings, LogOut, Home, Search, Plus, X, CheckCircle, AlertCircle, Heart, Trash2, CreditCard, Key, RefreshCw } from 'lucide-react'
+import { User, Calendar, Clock, Star, MessageSquare, Settings, LogOut, Home, Search, Plus, X, CheckCircle, AlertCircle, Heart, Trash2, CreditCard, Key, RefreshCw, MapPin, Phone } from 'lucide-react'
 import { useAuth } from '../App'
 
 const API_URL = 'http://localhost:3001/api'
@@ -220,7 +220,7 @@ export default function Dashboard() {
       case 'paid': return 'Paid - Await Service'
       case 'rejected': return 'Rejected'
       case 'confirmed': return 'Confirmed'
-      case 'completed': return 'Completed'
+      case 'completed': return 'Work Completed'
       case 'cancelled': return 'Cancelled'
       case 'refunded': return 'Refunded'
       default: return status
@@ -348,7 +348,7 @@ export default function Dashboard() {
             ) : (
               <div className="space-y-4">
                 {userBookings.map((booking) => (
-                  <div key={booking._id} className="border border-border rounded-card p-4 hover:shadow-md transition-shadow">
+                  <div key={booking._id} className="border border-border rounded-card p-4 hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/booking/${booking._id}`)}>
                     <div className="flex flex-col md:flex-row gap-4">
                       <img
                         src={booking.worker_photo || booking.workerPhoto || 'https://ui-avatars.com/api/?name=Worker&background=22c55e&color=fff'}
@@ -360,6 +360,14 @@ export default function Dashboard() {
                           <div>
                             <h3 className="font-semibold text-gray-800">{booking.worker_name || booking.workerName || 'Worker'}</h3>
                             <p className="text-text-secondary text-sm">{booking.service_type}</p>
+                            
+                            {/* Detailed Worker info if accepted or paid */}
+                            {(booking.status === 'accepted' || booking.status === 'paid' || booking.status === 'completed') && booking.worker_id && (
+                              <div className="mt-2 text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-100 shadow-sm">
+                                <p className="flex items-center gap-2"><Phone className="w-4 h-4 text-green-600"/> {(booking.worker_id.phone) || 'Phone not provided'}</p>
+                                <p className="flex items-center gap-2 mt-1"><MapPin className="w-4 h-4 text-green-600"/> {(booking.worker_id.address || booking.worker_id.location) || 'Address not provided'}</p>
+                              </div>
+                            )}
                           </div>
                           <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(booking.status)}`}>
                             {getStatusLabel(booking.status)}
@@ -406,12 +414,46 @@ export default function Dashboard() {
                                 <span className="text-sm">Completed</span>
                               </div>
                             )}
-                            {(booking.status === 'pending' || booking.status === 'offer_pending') && (
-                              <div className="flex items-center space-x-2 px-4 py-2 bg-orange-100 text-orange-700 rounded-lg">
-                                <Clock className="w-4 h-4" />
-                                <span className="text-sm">Waiting for worker acceptance</span>
-                              </div>
+{(booking.status === 'pending' || booking.status === 'offer_pending') && (
+                              <>
+                                <div className="flex items-center space-x-2 px-4 py-2 bg-orange-100 text-orange-700 rounded-lg mr-2">
+                                  <Clock className="w-4 h-4" />
+                                  <span className="text-sm">Waiting for worker</span>
+                                </div>
+                              </>
                             )}
+                            {/* Delete button for all bookings */}
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (window.confirm('Delete this booking?')) {
+                                  try {
+                                    const response = await fetch(`${API_URL}/bookings/${booking._id}`, {
+                                      method: 'DELETE',
+                                      headers: { 'Authorization': `Bearer ${token}` }
+                                    });
+                                    if (response.ok) {
+                                      showToast('Booking deleted', 'success');
+                                      const bookingsResponse = await fetch(`${API_URL}/bookings`, {
+                                        headers: { 'Authorization': `Bearer ${token}` }
+                                      });
+                                      if (bookingsResponse.ok) {
+                                        const data = await bookingsResponse.json();
+                                        setBookings(data);
+                                      }
+                                    } else {
+                                      showToast('Failed to delete booking', 'error');
+                                    }
+                                  } catch (error) {
+                                    showToast('Error deleting booking', 'error');
+                                  }
+                                }
+                              }}
+                              className="px-3 py-2 text-sm bg-red-100 text-red-700 border border-red-200 rounded-lg hover:bg-red-200 transition-colors flex items-center gap-1"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -518,35 +560,67 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-4">
-                {messages.map((message) => (
-                  <div 
-                    key={message._id} 
-                    className={`border rounded-card p-4 ${message.is_read ? 'border-border bg-gray-50' : 'border-green-300 bg-green-50'}`}
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <Key className="w-5 h-5 text-green-600" />
-                        <h3 className="font-semibold text-gray-800">{message.title || 'OTP Message'}</h3>
+{messages.map((message) => {
+                  const handleDeleteMessage = async () => {
+                    if (!window.confirm('Delete this message?')) return;
+                    try {
+                      const response = await fetch(`${API_URL}/messages/${message._id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                      });
+                      if (response.ok) {
+                        showToast('Message deleted', 'success');
+                        fetchMessages();
+                      } else {
+                        showToast('Failed to delete message', 'error');
+                      }
+                    } catch (error) {
+                      console.error('Delete message error:', error);
+                      showToast('Failed to delete message', 'error');
+                    }
+                  };
+
+                  return (
+                    <div 
+                      key={message._id} 
+                      className={`border rounded-card p-4 ${message.is_read ? 'border-border bg-gray-50 opacity-75' : 'border-green-300 bg-green-50 shadow-md'}`}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex items-center gap-2 flex-1">
+                          <Key className="w-5 h-5 text-green-600 flex-shrink-0" />
+                          <h3 className="font-semibold text-gray-800 truncate">{message.title || 'OTP Message'}</h3>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {!message.is_read && (
+                            <span className="px-2 py-1 bg-green-500 text-white text-xs rounded-full">New</span>
+                          )}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteMessage(); }}
+                            className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-full transition-all duration-200"
+                            title="Delete message"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                      {!message.is_read && (
-                        <span className="px-2 py-1 bg-green-500 text-white text-xs rounded-full">New</span>
+                      <p className="text-text-secondary text-sm mb-3">{message.message}</p>
+                      {message.otp && (
+                        <div className="bg-white border border-green-200 rounded-lg p-3 mb-3 inline-block shadow-sm">
+                          <span className="text-sm text-gray-500 font-medium">Your OTP: </span>
+                          <span className="text-2xl font-bold text-green-600 tracking-wider">{message.otp}</span>
+                        </div>
                       )}
-                    </div>
-                    <p className="text-text-secondary text-sm mb-3">{message.message}</p>
-                    {message.otp && (
-                      <div className="bg-white border border-green-200 rounded-lg p-3 inline-block">
-                        <span className="text-sm text-gray-500">Your OTP: </span>
-                        <span className="text-2xl font-bold text-green-600 tracking-wider">{message.otp}</span>
+                      <div className="flex items-center justify-between text-xs text-gray-400">
+                        <span>
+                          {message.created_at && new Date(message.created_at).toLocaleString()}
+                        </span>
+                        {message.otp_expiry && (
+                          <span>• Expires: {new Date(message.otp_expiry).toLocaleTimeString()}</span>
+                        )}
                       </div>
-                    )}
-                    <div className="mt-2 text-xs text-gray-400">
-                      {message.created_at && new Date(message.created_at).toLocaleString()}
-                      {message.otp_expiry && (
-                        <span className="ml-2">• Expires: {new Date(message.otp_expiry).toLocaleTimeString()}</span>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

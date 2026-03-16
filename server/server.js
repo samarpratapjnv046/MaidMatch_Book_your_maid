@@ -137,7 +137,7 @@ const bookingSchema = new mongoose.Schema({
   // Status flow: pending -> offer_pending -> accepted -> paid -> completed
   // 'pending' = initial, 'offer_pending' = waiting for worker to accept/reject
   status: { type: String, default: 'offer_pending', enum: ['pending', 'offer_pending', 'accepted', 'rejected', 'confirmed', 'completed', 'cancelled'] },
-  payment_status: { type: String, default: 'pending', enum: ['pending', 'paid', 'refunded', 'failed'] },
+  payment_status: { type: String, default: 'pending', enum: ['pending', 'paid', 'completed', 'refunded', 'failed'] },
   booking_status: { type: String, default: 'pending_worker_acceptance', enum: ['pending_payment', 'pending_worker_acceptance', 'accepted', 'rejected', 'confirmed', 'completed', 'cancelled'] },
   razorpay_order_id: { type: String },
   razorpay_payment_id: { type: String },
@@ -1124,17 +1124,18 @@ app.get('/api/bookings', authenticateToken, async (req, res) => {
   // Handle both 'user' and 'customer' types for customers
   if (req.user.type === 'customer' || req.user.type === 'user') {
     bookings = await Booking.find({ user_id: req.user.id })
-      .populate('user_id', 'name email')
-      .populate('worker_id', 'name email phone')
+      .populate('user_id', 'name email phone address city location')
+      .populate('worker_id', 'name email phone address city location photo')
       .sort({ created_at: -1 });
   } else if (req.user.type === 'worker') {
     bookings = await Booking.find({ worker_id: req.user.id })
-      .populate('user_id', 'name email phone')
+      .populate('user_id', 'name email phone address city location')
+      .populate('worker_id', 'name email phone address city location photo')
       .sort({ created_at: -1 });
   } else {
     bookings = await Booking.find()
-      .populate('user_id', 'name email')
-      .populate('worker_id', 'name email phone')
+      .populate('user_id', 'name email phone address city location')
+      .populate('worker_id', 'name email phone address city location photo')
       .sort({ created_at: -1 });
   }
   
@@ -1159,10 +1160,187 @@ app.get('/api/bookings/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
     
+    
     res.json(booking);
   } catch (error) {
     console.error('Get booking error:', error);
     res.status(500).json({ error: 'Failed to fetch booking' });
+  }
+});
+
+// User/Admin Delete Booking
+app.delete('/api/bookings/:id', authenticateToken, async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    // Only Admin or the User who created the booking can delete it
+    if (req.user.type !== 'admin' && booking.user_id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Not authorized to delete this booking' });
+    }
+
+    const cancelledBy = req.user.type === 'admin' ? 'Admin' : 'User';
+
+    // Message to Worker
+    await Message.create({
+      user_id: booking.user_id,
+      worker_id: booking.worker_id,
+      booking_id: booking._id,
+      type: 'booking_update',
+      title: 'Booking Cancelled',
+      message: `The booking for ${booking.service_type} scheduled on ${booking.date} at ${booking.time} has been cancelled by ${cancelledBy}.`
+    });
+
+    // Message to User (if admin cancelled)
+    if (req.user.type === 'admin') {
+      await Message.create({
+        user_id: booking.user_id,
+        booking_id: booking._id,
+        type: 'booking_update',
+        title: 'Booking Cancelled by Admin',
+        message: `Your booking for ${booking.service_type} scheduled on ${booking.date} at ${booking.time} has been cancelled by Admin.`
+      });
+    }
+
+    // Message to Admin (if user cancelled) - find all admins
+    if (req.user.type !== 'admin') {
+      const admins = await User.find({ role: 'admin' });
+      for (const admin of admins) {
+        await Message.create({
+          user_id: admin._id,
+          booking_id: booking._id,
+          type: 'booking_update',
+          title: 'Booking Cancelled by User',
+          message: `Booking #${booking._id} for ${booking.service_type} on ${booking.date} was cancelled by the user (${booking.user_name || 'Unknown'}).`
+        });
+      }
+    }
+
+    const io = app.get('io');
+    if (io) {
+      io.emit(`booking_cancelled_${booking.worker_id}`, { booking_id: booking._id, message: 'A booking has been cancelled.' });
+      io.emit(`booking_cancelled_${booking.user_id}`, { booking_id: booking._id, message: 'A booking has been cancelled.' });
+    }
+
+    await Booking.findByIdAndDelete(req.params.id);
+
+    res.json({ success: true, message: 'Booking deleted successfully' });
+  } catch (error) {
+    console.error('Delete booking error:', error);
+    res.status(500).json({ error: 'Failed to delete booking' });
+  }
+});
+
+// Worker Request Delete Booking
+app.post('/api/bookings/:id/request-delete', authenticateToken, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    // Only the assigned worker can request deletion
+    if (req.user.type !== 'worker' || booking.worker_id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Not authorized to request deletion for this booking' });
+    }
+
+    // Mark booking with cancel_requested flag
+    booking.cancel_requested = true;
+    booking.cancel_reason = reason || 'Not provided';
+    await booking.save();
+
+    // Message to User
+    await Message.create({
+      user_id: booking.user_id,
+      worker_id: booking.worker_id,
+      booking_id: booking._id,
+      type: 'booking_update',
+      title: 'Worker Requested Cancellation',
+      message: `The worker has requested to cancel your booking for ${booking.service_type} on ${booking.date}. Reason: ${reason || 'Not provided'}. You can cancel the booking from your dashboard.`
+    });
+
+    // Message to All Admins
+    const admins = await User.find({ role: 'admin' });
+    for (const admin of admins) {
+      await Message.create({
+        user_id: admin._id,
+        worker_id: booking.worker_id,
+        booking_id: booking._id,
+        type: 'booking_update',
+        title: 'Worker Cancel Request - Needs Review',
+        message: `Worker ${booking.worker_name} has requested to cancel booking #${booking._id} for ${booking.service_type} on ${booking.date}. Reason: ${reason || 'Not provided'}. Please review and approve/reject from the Bookings tab.`
+      });
+    }
+
+    const io = app.get('io');
+    if (io) {
+      io.emit(`booking_delete_request_${booking.user_id}`, { booking_id: booking._id, message: 'Worker requested to cancel the booking.' });
+    }
+
+    res.json({ success: true, message: 'Cancellation request sent to user and admin successfully' });
+  } catch (error) {
+    console.error('Request delete booking error:', error);
+    res.status(500).json({ error: 'Failed to request delete' });
+  }
+});
+
+// Admin approve/reject worker's cancel request
+app.put('/api/bookings/:id/approve-cancel', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.type !== 'admin') {
+      return res.status(403).json({ error: 'Only admin can approve/reject cancel requests' });
+    }
+
+    const { action } = req.body; // 'approve' or 'reject'
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    if (action === 'approve') {
+      // Notify worker
+      await Message.create({
+        user_id: booking.user_id,
+        worker_id: booking.worker_id,
+        booking_id: booking._id,
+        type: 'booking_update',
+        title: 'Cancellation Approved',
+        message: `Your cancellation request for booking on ${booking.date} has been approved by admin. The booking has been cancelled.`
+      });
+      // Notify user
+      await Message.create({
+        user_id: booking.user_id,
+        booking_id: booking._id,
+        type: 'booking_update',
+        title: 'Booking Cancelled',
+        message: `Your booking for ${booking.service_type} on ${booking.date} has been cancelled as per the worker's request (approved by admin).`
+      });
+
+      await Booking.findByIdAndDelete(req.params.id);
+      res.json({ success: true, message: 'Cancel request approved. Booking deleted.' });
+    } else {
+      booking.cancel_requested = false;
+      booking.cancel_reason = '';
+      await booking.save();
+
+      // Notify worker
+      await Message.create({
+        user_id: booking.user_id,
+        worker_id: booking.worker_id,
+        booking_id: booking._id,
+        type: 'booking_update',
+        title: 'Cancellation Rejected',
+        message: `Your cancellation request for booking on ${booking.date} has been rejected by admin. Please proceed with the booking.`
+      });
+
+      res.json({ success: true, message: 'Cancel request rejected.' });
+    }
+  } catch (error) {
+    console.error('Approve cancel error:', error);
+    res.status(500).json({ error: 'Failed to process cancel request' });
   }
 });
 
@@ -1278,14 +1456,13 @@ app.post('/api/otp/generate', authenticateToken, async (req, res) => {
     booking.otp_attempts = 0;
     await booking.save();
 
-    // Create message with OTP (visible only to user)
+    // Create message with OTP (visible ONLY to user - no worker_id so workers can't see it)
     const message = await Message.create({
       user_id: booking.user_id,
-      worker_id: booking.worker_id,
       booking_id: booking._id,
       type: 'otp',
       title: 'OTP for Job Completion',
-message: `Your OTP for completing the booking is: ${otp}. This OTP will expire in 15 minutes. Share this OTP with the worker after the service is completed.`,
+      message: `Your OTP for completing the booking is: ${otp}. Share this OTP with the worker ONLY after the service is completed. Do NOT share it beforehand.`,
       otp: otp,
       otp_expiry: otpExpiry
     });
@@ -1387,14 +1564,19 @@ app.post('/api/otp/verify', authenticateToken, async (req, res) => {
     wallet.updated_at = new Date();
     await wallet.save();
 
-    // Create payment record
+    // Create or update payment record with all required fields
     await Payment.findOneAndUpdate(
       { booking_id: booking._id },
       { 
+        user_id: booking.user_id,
+        worker_id: booking.worker_id,
+        amount: booking.total_price,
+        platform_commission: booking.commission_amount || (booking.total_price * COMMISSION_RATE),
+        worker_earnings: payoutAmount,
         payment_status: 'completed',
-        worker_earnings: payoutAmount
+        transaction_id: booking.razorpay_payment_id || 'manual_otp_verify'
       },
-      { upsert: true }
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
     // Notify user
@@ -1413,8 +1595,11 @@ app.post('/api/otp/verify', authenticateToken, async (req, res) => {
       wallet_balance: wallet.balance
     });
   } catch (error) {
-    console.error('Verify OTP error:', error);
-    res.status(500).json({ error: 'Failed to verify OTP' });
+    console.error('CRITICAL: Verify OTP error:', error);
+    res.status(500).json({ 
+      error: 'Failed to verify OTP', 
+      details: error.message 
+    });
   }
 });
 
@@ -1455,7 +1640,15 @@ app.get('/api/messages', authenticateToken, async (req, res) => {
   try {
     const { type, booking_id } = req.query;
     
-    let query = { user_id: req.user.id };
+    // Match messages for user OR worker
+    let query = {};
+    if (req.user.type === 'worker') {
+      // Workers see messages where they are the worker, but NOT OTP messages
+      query.$or = [{ user_id: req.user.id }, { worker_id: req.user.id }];
+      query.type = { $ne: 'otp' };
+    } else {
+      query.user_id = req.user.id;
+    }
     
     if (type) {
       query.type = type;
@@ -1487,10 +1680,6 @@ app.put('/api/messages/:id/read', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Message not found' });
     }
 
-    if (message.user_id.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
     message.is_read = true;
     await message.save();
 
@@ -1498,6 +1687,23 @@ app.put('/api/messages/:id/read', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Mark read error:', error);
     res.status(500).json({ error: 'Failed to mark message as read' });
+  }
+});
+
+// Delete message
+app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
+  try {
+    const message = await Message.findById(req.params.id);
+    
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    await Message.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Message deleted successfully' });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ error: 'Failed to delete message' });
   }
 });
 
@@ -1952,6 +2158,7 @@ app.post('/api/payments/verify', authenticateToken, async (req, res) => {
     booking.razorpay_payment_id = razorpay_payment_id;
     booking.razorpay_signature = razorpay_signature;
     booking.payment_status = 'paid';
+    booking.status = 'paid';
     booking.booking_status = 'pending_worker_acceptance';
     booking.payment_verified = true;
     booking.commission_amount = commissionAmount;

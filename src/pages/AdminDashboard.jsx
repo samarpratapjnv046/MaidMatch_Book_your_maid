@@ -226,6 +226,48 @@ export default function AdminDashboard() {
     fetchData()
   }
 
+  const handleDeleteBooking = async (bookingId) => {
+    if (!confirm('Are you sure you want to delete this booking? This action cannot be undone.')) return
+    
+    const token = localStorage.getItem('maidmatch_token')
+    try {
+      const response = await fetch(`${API_URL}/bookings/${bookingId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (response.ok) {
+        fetchData()
+      } else {
+        alert('Failed to delete booking')
+      }
+    } catch (error) {
+      console.error('Error deleting booking:', error)
+    }
+  }
+
+  const handleApproveCancelRequest = async (bookingId, action) => {
+    const token = localStorage.getItem('maidmatch_token')
+    try {
+      const response = await fetch(`${API_URL}/bookings/${bookingId}/approve-cancel`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ action })
+      })
+      const data = await response.json()
+      if (response.ok) {
+        alert(data.message)
+        fetchData()
+      } else {
+        alert(data.error || 'Failed to process')
+      }
+    } catch (error) {
+      console.error('Error processing cancel request:', error)
+    }
+  }
+
   const handleUpdateComplaint = async (complaintId, status, resolutionNotes) => {
     const token = localStorage.getItem('maidmatch_token')
     await fetch(`${API_URL}/admin/complaints/${complaintId}`, {
@@ -663,12 +705,15 @@ export default function AdminDashboard() {
 
               <div className="space-y-3">
                 {filteredBookings.map(booking => (
-                  <div key={booking._id} className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+                  <div key={booking._id} className="bg-slate-800/50 rounded-xl p-4 border border-slate-700 cursor-pointer hover:border-emerald-500/50 transition-colors" onClick={() => window.location.href = `/booking/${booking._id}`}>
                     <div className="flex flex-col sm:flex-row sm:justify-between gap-3">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-2">
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(booking.status)}`}>{booking.status}</span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(booking.status)}`}>{booking.status === 'completed' ? 'Work Completed' : booking.status === 'offer_pending' ? 'Waiting for Worker' : booking.status}</span>
                           <span className="text-slate-400 text-xs">{booking.service_type}</span>
+                          {booking.cancel_requested && (
+                            <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400 border border-red-500/30">⚠ Cancel Requested</span>
+                          )}
                         </div>
                         <div className="flex items-center gap-3 mb-2">
                           <img src={booking.worker_photo || `https://ui-avatars.com/api/?name=${booking.worker_name}&background=22c55e&color=fff`} alt="" className="w-10 h-10 rounded-full" />
@@ -683,11 +728,23 @@ export default function AdminDashboard() {
                           <span>{booking.duration}</span>
                         </div>
                       </div>
-                      <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2">
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2" onClick={(e) => e.stopPropagation()}>
                         <p className="text-xl font-bold text-white">₹{booking.total_price?.toLocaleString()}</p>
-                        <button onClick={() => { setSelectedBooking(booking); setBookingStatusModal(true); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs">
-                          Update
-                        </button>
+                        <div className="flex gap-2 flex-wrap">
+                          {booking.cancel_requested && (
+                            <>
+                              <button onClick={() => handleApproveCancelRequest(booking._id, 'approve')} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs">Approve Cancel</button>
+                              <button onClick={() => handleApproveCancelRequest(booking._id, 'reject')} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs">Reject Cancel</button>
+                            </>
+                          )}
+                          <button onClick={() => { setSelectedBooking(booking); setBookingStatusModal(true); }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs">
+                            Update
+                          </button>
+                          <button onClick={() => handleDeleteBooking(booking._id)} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs flex items-center gap-1">
+                            <Trash2 className="w-3 h-3" />
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -978,7 +1035,7 @@ export default function AdminDashboard() {
                       </div>
                       <div className="text-right">
                         <p className="text-white text-sm font-medium">₹{booking.total_price}</p>
-                        <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(booking.status)}`}>{booking.status}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(booking.status)}`}>{booking.status === 'completed' ? 'Work Completed' : booking.status}</span>
                       </div>
                     </div>
                   </div>

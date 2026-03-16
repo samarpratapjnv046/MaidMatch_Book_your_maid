@@ -174,6 +174,36 @@ export default function WorkerDashboard() {
     }
   }
 
+  const handleRequestDelete = async (bookingId) => {
+    const reason = window.prompt("Please enter a reason for cancelling this booking:");
+    if (reason === null) return; // user cancelled prompt
+
+    const storedToken = localStorage.getItem('maidmatch_token');
+    if (!storedToken) return;
+
+    try {
+      const response = await fetch(`${API_URL}/bookings/${bookingId}/request-delete`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${storedToken}`
+        },
+        body: JSON.stringify({ reason })
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        showToast('Cancellation request sent to user successfully', 'success');
+        fetchWorkerBookings();
+      } else {
+        showToast(data.error || 'Failed to request cancellation', 'error');
+      }
+    } catch (error) {
+      console.error('Request delete error:', error);
+      showToast('Failed to request cancellation', 'error');
+    }
+  }
+
   const handleVerifyOtp = async (bookingId) => {
     if (!otpInput || otpInput.length !== 6) {
       setOtpError('Please enter a valid 6-digit OTP')
@@ -238,7 +268,7 @@ export default function WorkerDashboard() {
       case 'offer_pending': return 'New Request'
       case 'accepted': return 'Accepted'
       case 'paid': return 'Paid'
-      case 'completed': return 'Completed'
+      case 'completed': return 'Work Completed'
       case 'rejected': return 'Rejected'
       case 'cancelled': return 'Cancelled'
       default: return status
@@ -248,6 +278,7 @@ export default function WorkerDashboard() {
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: TrendingUp },
     { id: 'bookings', label: 'Bookings', icon: Calendar },
+    { id: 'messages', label: 'Messages', icon: MessageSquare },
     { id: 'profile', label: 'Profile', icon: User },
     { id: 'history', label: 'History', icon: Clock },
     { id: 'reviews', label: 'Reviews', icon: Star },
@@ -341,7 +372,7 @@ export default function WorkerDashboard() {
         <h3 className="text-lg font-semibold text-gray-800 mb-4">Pending Requests</h3>
         <div className="space-y-4">
           {bookings.filter(b => b.status === 'pending' || b.status === 'offer_pending').map((booking) => (
-            <div key={booking._id} className="border border-orange-200 bg-orange-50 rounded-xl p-4">
+            <div key={booking._id} className="border border-orange-200 bg-orange-50 rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/booking/${booking._id}`)}>
               <div className="flex justify-between items-start mb-3">
                 <div>
                   <h4 className="font-semibold text-gray-800">{booking.user_name}</h4>
@@ -386,16 +417,94 @@ export default function WorkerDashboard() {
         <h3 className="text-lg font-semibold text-gray-800 mb-4">All Bookings</h3>
         <div className="space-y-4">
           {bookings.map((booking) => (
-            <div key={booking._id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-              <div>
-                <p className="font-medium text-gray-800">{booking.user_name}</p>
-                <p className="text-sm text-gray-500">{booking.date} • {booking.service_type}</p>
+            <div key={booking._id} className="flex flex-col p-4 bg-gray-50 rounded-xl border border-gray-200 cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/booking/${booking._id}`)}>
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="font-semibold text-gray-800 text-lg">{booking.user_name}</p>
+                  <p className="text-sm text-gray-500">{booking.date} • {booking.service_type}</p>
+                  {/* Detailed User info if accepted or paid */}
+                  {(booking.status === 'accepted' || booking.status === 'paid' || booking.status === 'confirmed') && booking.user_id && (
+                    <div className="mt-2 text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-100 shadow-sm">
+                      <p className="flex items-center gap-2"><Phone className="w-4 h-4 text-green-600"/> {booking.user_phone || 'N/A'}</p>
+                      <p className="flex items-center gap-2 mt-1"><MapPin className="w-4 h-4 text-green-600"/> {booking.user_address || booking.user_id?.address || 'Address not provided'}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="text-right">
+                  <p className="font-semibold text-green-600 text-lg">₹{booking.worker_payout_amount}</p>
+                  <span className={`text-xs px-3 py-1 rounded-full inline-block mt-1 ${getStatusColor(booking.status)}`}>
+                    {getStatusLabel(booking.status)}
+                  </span>
+                </div>
               </div>
-              <div className="text-right">
-                <p className="font-semibold text-green-600">₹{booking.worker_payout_amount}</p>
-                <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(booking.status)}`}>
-                  {getStatusLabel(booking.status)}
-                </span>
+
+              {/* Action Buttons & OTP for Paid Bookings */}
+              <div className="mt-2 border-t border-gray-200 pt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                {booking.status === 'paid' && (
+                  <div className="flex flex-1 items-center gap-2 w-full sm:w-auto">
+                    <input
+                      type="text"
+                      placeholder="Enter 6-digit OTP from user"
+                      value={verifyingOtp === booking._id ? otpInput : ''}
+                      onChange={(e) => {
+                        if (verifyingOtp !== booking._id) setVerifyingOtp(booking._id);
+                        setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6));
+                      }}
+                      className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                    />
+                    <button
+                      onClick={() => handleVerifyOtp(booking._id)}
+                      disabled={verifyingOtp === booking._id && !otpInput}
+                      className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:opacity-50 whitespace-nowrap"
+                    >
+                      Verify & Complete
+                    </button>
+                  </div>
+                )}
+                
+                {otpError && verifyingOtp === booking._id && (
+                  <p className="text-red-500 text-xs w-full">{otpError}</p>
+                )}
+
+                {/* Cancel Request Button */}
+                {(booking.status === 'accepted' || booking.status === 'paid') && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleRequestDelete(booking._id); }}
+                    className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 rounded-lg hover:bg-red-100 transition whitespace-nowrap"
+                  >
+                    Request Cancel
+                  </button>
+                )}
+                {/* Delete Booking Button */}
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (!window.confirm('Delete this booking?')) return;
+                    try {
+                      const response = await fetch(`${API_URL}/bookings/${booking._id}/request-delete`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({ reason: 'Worker deleted booking' })
+                      });
+                      const data = await response.json();
+                      if (response.ok) {
+                        showToast('Delete request sent', 'success');
+                        fetchBookings();
+                      } else {
+                        showToast(data.error || 'Failed to delete', 'error');
+                      }
+                    } catch (error) {
+                      showToast('Failed to send delete request', 'error');
+                    }
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 rounded-lg hover:bg-red-100 transition whitespace-nowrap flex items-center gap-1"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  Delete
+                </button>
               </div>
             </div>
           ))}
@@ -403,6 +512,100 @@ export default function WorkerDashboard() {
             <p className="text-center text-gray-500 py-8">No bookings yet</p>
           )}
         </div>
+      </div>
+    </div>
+  )
+  // Messages View
+  const [workerMessages, setWorkerMessages] = useState([])
+  const [loadingWorkerMessages, setLoadingWorkerMessages] = useState(false)
+
+  const fetchWorkerMessages = async () => {
+    setLoadingWorkerMessages(true)
+    try {
+      const response = await fetch(`${API_URL}/messages`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setWorkerMessages(data)
+      }
+    } catch (error) {
+      console.error('Error fetching messages:', error)
+    } finally {
+      setLoadingWorkerMessages(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'messages') fetchWorkerMessages()
+  }, [activeTab])
+
+  const handleDeleteWorkerMessage = async (messageId) => {
+    if (!window.confirm('Delete this message?')) return
+    try {
+      const response = await fetch(`${API_URL}/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (response.ok) {
+        showToast('Message deleted', 'success')
+        fetchWorkerMessages()
+      } else {
+        showToast('Failed to delete message', 'error')
+      }
+    } catch (error) {
+      showToast('Failed to delete message', 'error')
+    }
+  }
+
+  const MessagesView = () => (
+    <div className="space-y-6">
+      <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">Messages</h2>
+        {loadingWorkerMessages ? (
+          <div className="text-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mx-auto"></div>
+            <p className="text-gray-500 mt-2">Loading messages...</p>
+          </div>
+        ) : workerMessages.length === 0 ? (
+          <div className="text-center py-12">
+            <MessageSquare className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-600 mb-2">No Messages</h3>
+            <p className="text-gray-400">Booking notifications will appear here</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {workerMessages.map((msg) => (
+              <div
+                key={msg._id}
+                className={`border rounded-xl p-4 ${msg.is_read ? 'border-gray-200 bg-gray-50 opacity-75' : 'border-green-300 bg-green-50'}`}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2 flex-1">
+                    <Bell className="w-5 h-5 text-green-600 flex-shrink-0" />
+                    <h3 className="font-semibold text-gray-800 text-sm truncate">{msg.title || 'Notification'}</h3>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {!msg.is_read && (
+                      <span className="px-2 py-0.5 bg-green-500 text-white text-xs rounded-full">New</span>
+                    )}
+                    <button
+                      onClick={() => handleDeleteWorkerMessage(msg._id)}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-all"
+                      title="Delete message"
+                    >
+                      <XCircle className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-gray-600 text-sm mb-2">{msg.message}</p>
+                <span className="text-xs text-gray-400">
+                  {msg.created_at && new Date(msg.created_at).toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -469,26 +672,42 @@ export default function WorkerDashboard() {
     </div>
   )
 
-  // History View
+  // History View (Completed Work)
   const HistoryView = () => (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-800">Job History</h2>
+      <h2 className="text-2xl font-bold text-gray-800">Work History</h2>
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
         <div className="space-y-4">
           {bookings.filter(b => b.status === 'completed').map((booking) => (
-            <div key={booking._id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-              <div>
-                <p className="font-medium text-gray-800">{booking.user_name}</p>
-                <p className="text-sm text-gray-500">{booking.date}</p>
+            <div
+              key={booking._id}
+              className="flex items-center justify-between p-4 bg-gray-50 rounded-xl cursor-pointer hover:shadow-md transition-shadow border border-gray-200 hover:border-green-300"
+              onClick={() => navigate(`/booking/${booking._id}`)}
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                  <CheckCircle className="w-6 h-6 text-green-600" />
+                </div>
+                <div>
+                  <p className="font-semibold text-gray-800">{booking.user_name}</p>
+                  <p className="text-sm text-gray-500">{booking.service_type} • {booking.date}</p>
+                  <p className="text-xs text-gray-400">{booking.time} • {booking.duration}</p>
+                </div>
               </div>
-              <div className="text-right">
-                <p className="font-semibold text-green-600">₹{booking.worker_payout_amount}</p>
-                <span className="text-xs text-green-600">Completed</span>
+              <div className="text-right flex-shrink-0">
+                <p className="font-bold text-green-600 text-lg">₹{booking.worker_payout_amount}</p>
+                <span className="inline-block px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full border border-green-200">
+                  ✓ Work Completed
+                </span>
               </div>
             </div>
           ))}
           {bookings.filter(b => b.status === 'completed').length === 0 && (
-            <p className="text-center text-gray-500 py-8">No completed jobs yet</p>
+            <div className="text-center py-12">
+              <Clock className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-600 mb-2">No Completed Jobs Yet</h3>
+              <p className="text-gray-400">Jobs you complete will appear here with earnings info</p>
+            </div>
           )}
         </div>
       </div>
@@ -615,6 +834,7 @@ export default function WorkerDashboard() {
       <div className="flex-1 lg:ml-72 p-4 lg:p-8 mt-16 lg:mt-0">
         {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'bookings' && <BookingsView />}
+        {activeTab === 'messages' && <MessagesView />}
         {activeTab === 'profile' && <ProfileView />}
         {activeTab === 'history' && <HistoryView />}
         {activeTab === 'reviews' && <ReviewsView />}

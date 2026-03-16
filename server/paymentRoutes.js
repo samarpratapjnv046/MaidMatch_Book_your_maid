@@ -95,6 +95,7 @@ app.post('/api/payments/verify', authenticateToken, async (req, res) => {
     booking.razorpay_payment_id = razorpay_payment_id;
     booking.razorpay_signature = razorpay_signature;
     booking.payment_status = 'paid';
+    booking.status = 'paid';
     booking.booking_status = 'pending_worker_acceptance';
     booking.payment_verified = true;
     booking.commission_amount = commissionAmount;

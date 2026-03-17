@@ -598,8 +598,8 @@ app.get('/api/customers', authenticateToken, requireAdmin, async (req, res) => {
   res.json(users);
 });
 
-app.get('/api/workers', async (req, res) => {
-  const workers = await Worker.find().select('id name email phone photo gender hourly_rate daily_rate monthly_rate services experience skills address city state location pincode bio availability is_verified is_banned created_at');
+app.get('/api/workers', authenticateToken, requireAdmin, async (req, res) => {
+  const workers = await Worker.find().select('id name email phone photo gender hourly_rate daily_rate monthly_rate services experience skills address city state location pincode bio availability is_verified is_banned created_at aadhar_number aadhar_photo');
   res.json(workers);
 });
 
@@ -607,7 +607,7 @@ app.get('/api/workers/search', async (req, res) => {
   try {
     const { service, location, minPrice, maxPrice, bookingType, minRating, available } = req.query;
 
-    const query = { is_banned: false };
+    const query = { is_banned: false, is_verified: true };
 
     if (service) {
       query.services = { $regex: service, $options: 'i' };
@@ -660,14 +660,37 @@ app.get('/api/workers/search', async (req, res) => {
   }
 });
 
-app.get('/api/workers/:id', async (req, res) => {
-  const worker = await Worker.findOne({ _id: req.params.id, is_banned: false }).select('id name photo phone gender hourly_rate daily_rate monthly_rate aadhar_number services experience skills address city state location bio availability is_verified is_banned created_at');
-
+app.get('/api/admin/workers/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const worker = await Worker.findById(req.params.id);
   if (!worker) {
     return res.status(404).json({ error: 'Worker not found' });
   }
-
+  // Ensure full photo URL
+  if (worker.aadhar_photo && !worker.aadhar_photo.startsWith('http')) {
+    worker.aadhar_photo = `http://localhost:3001/${worker.aadhar_photo}`;
+  }
+  if (worker.photo && !worker.photo.startsWith('http')) {
+    worker.photo = `http://localhost:3001/${worker.photo}`;
+  }
   res.json(worker);
+});
+
+// Public worker detail endpoint for users
+app.get('/api/workers/:id', async (req, res) => {
+  const worker = await Worker.findById(req.params.id);
+  if (!worker) {
+    return res.status(404).json({ error: 'Worker not found' });
+  }
+  if (worker.is_banned || !worker.is_verified) {
+    return res.status(403).json({ error: 'Worker not available' });
+  }
+  // Ensure full photo URL - proxy through server to avoid CORS/mixed content
+  const workerObj = worker.toObject();
+  const proxyImage = (imagePath) => imagePath ? `http://localhost:3001/proxy-image/${imagePath}` : 'https://ui-avatars.com/api/?name=Worker&background=22c55e&color=fff&size=400';
+  
+  workerObj.aadhar_photo = proxyImage(workerObj.aadhar_photo);
+  workerObj.photo = proxyImage(workerObj.photo);
+  res.json(workerObj);
 });
 
 app.get('/api/workers/:id/availability', async (req, res) => {

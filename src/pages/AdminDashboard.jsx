@@ -198,10 +198,46 @@ export default function AdminDashboard() {
   }
 
   const viewWorkerDetails = async (worker) => {
-    setSelectedWorker(worker)
-    const workerBookingsList = bookings.filter(b => b.worker_id === worker._id || b.worker_id?._id === worker._id)
-    setWorkerBookings(workerBookingsList)
-    setDetailModalOpen(true)
+    console.log('Opening worker details for:', worker.name, 'ID:', worker._id, 'Has Aadhar:', !!worker.aadhar_number, 'Has Photo:', !!worker.aadhar_photo);
+    
+    try {
+      const token = localStorage.getItem('maidmatch_token')
+      console.log('Fetching from:', `http://localhost:3001/api/admin/workers/${worker._id}`);
+      
+      const response = await fetch(`http://localhost:3001/api/admin/workers/${worker._id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const fullWorker = await response.json()
+      console.log('Full worker data:', fullWorker);
+      
+      // Ensure photo URLs are full
+      if (fullWorker.aadhar_photo && !fullWorker.aadhar_photo.startsWith('http')) {
+        fullWorker.aadhar_photo = `http://localhost:3001/${fullWorker.aadhar_photo}`;
+      }
+      
+      setSelectedWorker(fullWorker)
+      const workerBookingsList = bookings.filter(b => b.worker_id === worker._id || (b.worker_id?._id === worker._id))
+      setWorkerBookings(workerBookingsList)
+      setDetailModalOpen(true)
+    } catch (error) {
+      console.error('Error fetching worker details:', error)
+      console.log('Using fallback worker data:', worker);
+      
+      // Fallback to basic worker data with full photo URL
+      const fallbackWorker = { ...worker };
+      if (fallbackWorker.aadhar_photo && !fallbackWorker.aadhar_photo.startsWith('http')) {
+        fallbackWorker.aadhar_photo = `http://localhost:3001/${fallbackWorker.aadhar_photo}`;
+      }
+      setSelectedWorker(fallbackWorker)
+      const workerBookingsList = bookings.filter(b => b.worker_id === worker._id || (b.worker_id?._id === worker._id))
+      setWorkerBookings(workerBookingsList)
+      setDetailModalOpen(true)
+    }
   }
 
   const viewCustomerDetails = async (customer) => {
@@ -566,7 +602,11 @@ export default function AdminDashboard() {
                   </thead>
                   <tbody>
                     {filteredWorkers.map(worker => (
-                      <tr key={worker._id} className="border-t border-slate-700">
+                      <tr 
+                        key={worker._id} 
+                        className="border-t border-slate-700 hover:bg-slate-700/50 cursor-pointer transition-colors"
+                        onClick={() => viewWorkerDetails(worker)}
+                      >
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <img src={worker.photo || `https://ui-avatars.com/api/?name=${worker.name}&background=22c55e&color=fff`} alt="" className="w-8 h-8 rounded-full" />
@@ -593,21 +633,33 @@ export default function AdminDashboard() {
                           )}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="flex gap-1">
-                            <button onClick={() => viewWorkerDetails(worker)} className="p-1.5 text-blue-400 hover:bg-blue-500/20 rounded" title="View Details">
-                              <Eye className="w-4 h-4" />
-                            </button>
-                            {!worker.is_verified && !worker.is_banned && (
-                              <button onClick={() => handleVerify(worker._id)} className="p-1.5 text-emerald-400 hover:bg-emerald-500/20 rounded" title="Verify">
-                                <CheckCircle className="w-4 h-4" />
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-slate-400">Click row to view</span>
+                            <div className="ml-auto flex gap-1">
+                              {!worker.is_verified && !worker.is_banned && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); handleVerify(worker._id); }} 
+                                  className="p-1.5 text-emerald-400 hover:bg-emerald-500/20 rounded" 
+                                  title="Verify"
+                                >
+                                  <CheckCircle className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); openBanModal(worker._id, 'worker', worker.is_banned); }} 
+                                className={`p-1.5 rounded ${worker.is_banned ? 'text-emerald-400 hover:bg-emerald-500/20' : 'text-yellow-400 hover:bg-yellow-500/20'}`} 
+                                title={worker.is_banned ? 'Unban' : 'Ban'}
+                              >
+                                {worker.is_banned ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                               </button>
-                            )}
-                            <button onClick={() => openBanModal(worker._id, 'worker', worker.is_banned)} className={`p-1.5 rounded ${worker.is_banned ? 'text-emerald-400 hover:bg-emerald-500/20' : 'text-yellow-400 hover:bg-yellow-500/20'}`} title={worker.is_banned ? 'Unban' : 'Ban'}>
-                              {worker.is_banned ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                            </button>
-                            <button onClick={() => handleDelete(worker._id, 'worker')} className="p-1.5 text-red-400 hover:bg-red-500/20 rounded" title="Delete">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleDelete(worker._id, 'worker'); }} 
+                                className="p-1.5 text-red-400 hover:bg-red-500/20 rounded" 
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -912,67 +964,76 @@ export default function AdminDashboard() {
 
       {/* Detail Modal for Worker/Customer */}
       {detailModalOpen && (selectedWorker || selectedCustomer) && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-slate-800 rounded-xl p-6 w-full max-w-2xl border border-slate-700 my-8">
-            <div className="flex justify-between items-start mb-6">
-              <h3 className="text-white font-semibold text-lg">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 md:p-8 overflow-y-auto max-h-screen">
+          <div className="bg-slate-800 rounded-2xl p-4 md:p-6 max-w-md md:max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-slate-700 shadow-2xl">
+            <div className="flex justify-between items-start mb-4 md:mb-6 pb-4 border-b border-slate-700">
+              <h3 className="text-white font-semibold text-base md:text-lg">
                 {selectedWorker ? 'Worker Details' : 'Customer Details'}
               </h3>
-              <button onClick={() => { setDetailModalOpen(false); setSelectedWorker(null); setSelectedCustomer(null); }} className="text-slate-400 hover:text-white">
+              <button 
+                onClick={() => { setDetailModalOpen(false); setSelectedWorker(null); setSelectedCustomer(null); }} 
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-700"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Profile Section */}
-            <div className="flex items-start gap-4 mb-6">
+            <div className="flex flex-col md:flex-row items-start gap-4 mb-6">
               <img 
                 src={selectedWorker?.photo || selectedCustomer?.photo || `https://ui-avatars.com/api/?name=${selectedWorker?.name || selectedCustomer?.name}&background=22c55e&color=fff`} 
                 alt="" 
-                className="w-20 h-20 rounded-xl" 
+                className="w-20 h-20 md:w-24 md:h-24 rounded-xl flex-shrink-0 mx-auto md:mx-0"
               />
-              <div className="flex-1">
-                <h4 className="text-white font-bold text-lg">{selectedWorker?.name || selectedCustomer?.name}</h4>
-                <p className="text-slate-400 text-sm">{selectedWorker?.email || selectedCustomer?.email}</p>
-                <div className="flex items-center gap-2 mt-2">
+              <div className="flex-1 min-w-0">
+                <h4 className="text-white font-bold text-lg md:text-xl truncate">{selectedWorker?.name || selectedCustomer?.name}</h4>
+                <p className="text-slate-400 text-sm md:text-base truncate max-w-full">{selectedWorker?.email || selectedCustomer?.email}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-2">
                   {selectedWorker?.is_verified ? (
-                    <span className="flex items-center gap-1 text-emerald-400 text-xs"><CheckCircle className="w-3 h-3" /> Verified</span>
+                    <span className="flex items-center gap-1 bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-md text-xs font-medium">
+                      <CheckCircle className="w-3 h-3" /> Verified
+                    </span>
                   ) : (
-                    <span className="flex items-center gap-1 text-yellow-400 text-xs"><AlertCircle className="w-3 h-3" /> Unverified</span>
+                    <span className="flex items-center gap-1 bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded-md text-xs font-medium">
+                      <AlertCircle className="w-3 h-3" /> Unverified
+                    </span>
                   )}
-                  {selectedWorker?.is_banned || selectedCustomer?.is_banned ? (
-                    <span className="flex items-center gap-1 text-red-400 text-xs"><XCircle className="w-3 h-3" /> Banned</span>
-                  ) : null}
+                  {(selectedWorker?.is_banned || selectedCustomer?.is_banned) && (
+                    <span className="flex items-center gap-1 bg-red-500/20 text-red-400 px-2 py-1 rounded-md text-xs font-medium">
+                      <XCircle className="w-3 h-3" /> Banned
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* Registration Details */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div className="bg-slate-700/30 rounded-lg p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 mb-6">
+              <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Mail className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-400 text-xs">Email</span>
+                  <Mail className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <span className="text-slate-400 text-xs font-medium">Email</span>
                 </div>
-                <p className="text-white text-sm">{selectedWorker?.email || selectedCustomer?.email}</p>
+                <p className="text-white text-sm break-all">{selectedWorker?.email || selectedCustomer?.email}</p>
               </div>
-              <div className="bg-slate-700/30 rounded-lg p-4">
+              <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Phone className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-400 text-xs">Phone</span>
+                  <Phone className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <span className="text-slate-400 text-xs font-medium">Phone</span>
                 </div>
                 <p className="text-white text-sm">{selectedWorker?.phone || selectedCustomer?.phone || 'Not provided'}</p>
               </div>
-              <div className="bg-slate-700/30 rounded-lg p-4">
+              <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <MapPin className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-400 text-xs">Location</span>
+                  <MapPin className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <span className="text-slate-400 text-xs font-medium">Location</span>
                 </div>
-                <p className="text-white text-sm">{selectedWorker?.location || selectedCustomer?.location || 'Not provided'}</p>
+                <p className="text-white text-sm truncate">{selectedWorker?.location || selectedCustomer?.location || 'Not provided'}</p>
               </div>
-              <div className="bg-slate-700/30 rounded-lg p-4">
+              <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Clock className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-400 text-xs">Joined</span>
+                  <Clock className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <span className="text-slate-400 text-xs font-medium">Joined</span>
                 </div>
                 <p className="text-white text-sm">{selectedWorker?.created_at ? new Date(selectedWorker.created_at).toLocaleDateString() : selectedCustomer?.created_at ? new Date(selectedCustomer.created_at).toLocaleDateString() : 'Unknown'}</p>
               </div>
@@ -982,88 +1043,153 @@ export default function AdminDashboard() {
             {selectedWorker && (
               <>
                 <div className="mb-6">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Briefcase className="w-4 h-4 text-slate-400" />
-                    <span className="text-slate-400 text-xs">Services Offered</span>
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-700">
+                    <Briefcase className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    <span className="text-slate-400 text-xs md:text-sm font-medium">Services Offered</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {selectedWorker.services?.map((service, i) => (
-                      <span key={i} className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs">{service}</span>
-                    )) || <span className="text-slate-400 text-sm">No services listed</span>}
+                      <span key={i} className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium whitespace-nowrap">
+                        {service}
+                      </span>
+                    )) || <span className="text-slate-400 text-sm italic">No services listed</span>}
                   </div>
                 </div>
-                <div className="mb-6">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Star className="w-4 h-4 text-slate-400" />
-                    <span className="text-slate-400 text-xs">Experience</span>
+                <div className="mb-4 md:mb-6">
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-700">
+                    <Star className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    <span className="text-slate-400 text-xs md:text-sm font-medium">Experience</span>
                   </div>
                   <p className="text-white text-sm">{selectedWorker.experience || 'Not provided'}</p>
                 </div>
-                <div className="mb-6">
-                  <div className="flex items-center gap-2 mb-3">
-                    <UserCheck className="w-4 h-4 text-slate-400" />
-                    <span className="text-slate-400 text-xs">Skills</span>
+                <div className="mb-4 md:mb-6">
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-700">
+                    <UserCheck className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                    <span className="text-slate-400 text-xs md:text-sm font-medium">Skills</span>
                   </div>
-                  <p className="text-white text-sm">{selectedWorker.skills || 'Not provided'}</p>
+                  <p className="text-white text-sm line-clamp-3">{selectedWorker.skills || 'Not provided'}</p>
                 </div>
                 {selectedWorker.bio && (
-                  <div className="mb-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <FileText className="w-4 h-4 text-slate-400" />
-                      <span className="text-slate-400 text-xs">Bio</span>
+                  <div className="mb-4 md:mb-6">
+                    <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-700">
+                      <FileText className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                      <span className="text-slate-400 text-xs md:text-sm font-medium">Bio</span>
                     </div>
-                    <p className="text-white text-sm">{selectedWorker.bio}</p>
+                    <p className="text-white text-sm line-clamp-4">{selectedWorker.bio}</p>
+                  </div>
+                )}
+                {/* Documents Section */}
+                {selectedWorker.aadhar_number && (
+                  <div className="mb-4 md:mb-6">
+                    <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-700">
+                      <Shield className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                      <span className="text-slate-400 text-xs md:text-sm font-medium">Documents</span>
+                    </div>
+                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 mb-3">
+                        <div>
+                          <label className="text-slate-400 text-xs font-medium block mb-1">Aadhar Number</label>
+                          <p className="text-white font-mono text-sm bg-black/30 px-3 py-1.5 rounded-md border border-slate-600">
+                            {selectedWorker.aadhar_number.replace(/(\d{4})(\d{4})(\d{4})/, '$1-$2 ****')}
+                          </p>
+                        </div>
+                        {selectedWorker.aadhar_photo && (
+                          <div>
+                            <label className="text-slate-400 text-xs font-medium block mb-1">Aadhar Photo</label>
+                            <div className="relative group cursor-pointer">
+                              <img 
+                                src={selectedWorker.aadhar_photo} 
+                                alt="Aadhar" 
+                                className="w-full h-20 md:h-24 object-cover rounded-lg border-2 border-slate-600 hover:border-emerald-500/50 transition-all bg-slate-800"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  const img = document.createElement('img')
+                                  img.src = selectedWorker.aadhar_photo
+                                  img.className = 'max-w-[95vw] max-h-[95vh] rounded-xl shadow-2xl'
+                                  const modal = document.createElement('div')
+                                  modal.className = 'fixed inset-0 bg-black/95 flex items-center justify-center z-[99999] p-4'
+                                  modal.appendChild(img)
+                                  modal.onclick = (ev) => {
+                                    if (ev.target === modal) {
+                                      document.body.removeChild(modal)
+                                    }
+                                  }
+                                  img.onclick = (ev) => ev.stopPropagation()
+                                  document.body.appendChild(modal)
+                                }}
+                              />
+                              <div className="absolute inset-0 bg-black/30 rounded-lg opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
+                                <Eye className="w-5 h-5 md:w-6 md:h-6 text-white" />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-2">
+                        <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs rounded-md font-medium">Verified Document</span>
+                        {selectedWorker.is_verified ? (
+                          <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs rounded-md font-bold border border-emerald-400/30">Profile Verified</span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 text-xs rounded-md font-medium">Pending Verification</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
               </>
             )}
 
             {/* Booking History */}
-            <div className="mb-6">
+            <div className="mb-6 pb-4 border-t border-slate-700 pt-4">
               <div className="flex items-center gap-2 mb-3">
-                <Calendar className="w-4 h-4 text-slate-400" />
-                <span className="text-slate-400 text-xs">Booking History</span>
+                <Calendar className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                <span className="text-slate-400 text-xs md:text-sm font-medium">Booking History</span>
               </div>
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {(selectedWorker ? workerBookings : customerBookings)?.map(booking => (
-                  <div key={booking._id} className="bg-slate-700/30 rounded-lg p-3">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-white text-sm font-medium">{booking.service_type}</p>
-                        <p className="text-slate-400 text-xs">{booking.date} at {booking.time}</p>
-                        <p className="text-slate-400 text-xs">Duration: {booking.duration}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-white text-sm font-medium">₹{booking.total_price}</p>
-                        <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(booking.status)}`}>{booking.status === 'completed' ? 'Work Completed' : booking.status}</span>
+              <div className="space-y-2 max-h-32 md:max-h-48 overflow-y-auto">
+                {(selectedWorker ? workerBookings : customerBookings)?.length > 0 ? (
+                  (selectedWorker ? workerBookings : customerBookings)?.slice(0, 5).map(booking => (
+                    <div key={booking._id} className="bg-slate-700/30 rounded-lg p-3 text-xs">
+                      <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
+                        <div>
+                          <p className="text-white font-medium truncate">{booking.service_type}</p>
+                          <p className="text-slate-400">{booking.date} at {booking.time}</p>
+                        </div>
+                        <div className="text-right min-w-[80px]">
+                          <p className="text-emerald-400 font-medium">₹{booking.total_price}</p>
+                          <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(booking.status)}`}>
+                            {booking.status === 'completed' ? 'Completed' : booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-                {(selectedWorker ? workerBookings : customerBookings)?.length === 0 && (
-                  <p className="text-slate-400 text-sm text-center py-4">No bookings found</p>
+                  ))
+                ) : (
+                  <p className="text-slate-400 text-sm text-center py-4 italic">No bookings found</p>
                 )}
               </div>
+              {(selectedWorker ? workerBookings : customerBookings)?.length > 5 && (
+                <p className="text-slate-400 text-xs text-center mt-1">+{(selectedWorker ? workerBookings : customerBookings)?.length - 5} more</p>
+              )}
             </div>
 
             {/* Action Buttons */}
-            <div className="flex gap-3">
+            <div className="flex flex-col sm:flex-row gap-2 pt-4 border-t border-slate-700">
               {selectedWorker && !selectedWorker.is_verified && !selectedWorker.is_banned && (
-                <button onClick={() => { handleVerify(selectedWorker._id); setDetailModalOpen(false); }} className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm">
+                <button onClick={() => { handleVerify(selectedWorker._id); setDetailModalOpen(false); }} className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-lg transition-all">
                   Verify Worker
                 </button>
               )}
               {selectedWorker && (
-                <button onClick={() => { openBanModal(selectedWorker._id, 'worker', selectedWorker.is_banned); setDetailModalOpen(false); }} className={`flex-1 py-2.5 rounded-lg text-sm ${selectedWorker.is_banned ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white'}`}>
+                <button onClick={() => { openBanModal(selectedWorker._id, 'worker', selectedWorker.is_banned); setDetailModalOpen(false); }} className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium shadow-lg transition-all ${selectedWorker.is_banned ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white border border-yellow-500/50'}`}>
                   {selectedWorker.is_banned ? 'Unban Worker' : 'Ban Worker'}
                 </button>
               )}
               {selectedCustomer && (
-                <button onClick={() => { openBanModal(selectedCustomer._id, 'customer', selectedCustomer.is_banned); setDetailModalOpen(false); }} className={`flex-1 py-2.5 rounded-lg text-sm ${selectedCustomer.is_banned ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white'}`}>
+                <button onClick={() => { openBanModal(selectedCustomer._id, 'customer', selectedCustomer.is_banned); setDetailModalOpen(false); }} className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium shadow-lg transition-all ${selectedCustomer.is_banned ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white border border-yellow-500/50'}`}>
                   {selectedCustomer.is_banned ? 'Unban Customer' : 'Ban Customer'}
                 </button>
               )}
-              <button onClick={() => { setDetailModalOpen(false); setSelectedWorker(null); setSelectedCustomer(null); }} className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm">
+              <button onClick={() => { setDetailModalOpen(false); setSelectedWorker(null); setSelectedCustomer(null); }} className="flex-1 py-2.5 px-4 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-sm font-medium shadow-lg transition-all">
                 Close
               </button>
             </div>
